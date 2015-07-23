@@ -11,7 +11,7 @@ This repository contains the files necessary for sending a drone out to sea to c
 ## Hardware
 The main components of our system includes the [3DR Pixhawk](https://store.3drobotics.com/products/3dr-pixhawk/?utm_source=google&utm_medium=cpc&utm_term=branded&utm_campaign=branded&gclid=CjwKEAjwocKtBRCf9d_Q5ovcyHASJAAHhJYOfuoWZGXrE88SaWO78lJ5QHvzFXxYLjEovl3Xv93cwRoCKv3w_wcB), the [Extreme 3D Pro Joystick](http://gaming.logitech.com/en-us/product/extreme-3d-pro-joystick), the [Connex video link](http://connex.amimon.com/), the [INOGENI 4K2USB3 video capture card](http://www.bhphotovideo.com/c/product/1073122-REG/inogeni_4k2usb3_4k_hdmi_to_usb.html) and a GoPro HERO 4 (http://shop.gopro.com/hero4/hero4-black/CHDHX-401.html). In order to communicate with the Pixhawk, a [915 MHz radio set](https://store.3drobotics.com/products/3dr-radio-set) is required.
 
-### Setup
+#### Setup
 Three USB ports are needed to fully utilize the code:
 1. Joystick
 2. 915 MHz radio
@@ -29,7 +29,7 @@ Then, power up the drone and press the arming button.
 Type in the following to run the code: `roslaunch snotbot snotbot.launch`
 
 The joystick can be used to send specific commands to the air vehicle:
-### Buttons
+#### Buttons
 - 1 (trigger) - Failsafe mode: allows user to fully control the drone using the joystick's axes
 - 3 - Arm
 - 4 - Disarm
