@@ -10,73 +10,32 @@ from geometry_msgs.msg import Point
 
 from calibrate import *
 
-class Vision():
+class FindFiducial():
     def __init__(self):
+        # Video capture variables
         self.cap = cv2.VideoCapture(1)
-        cv2.setMouseCallback('camera', self.draw_circle)
+        self.frame_width = self.cap.get(3)
+        self.frame_height = self.cap.get(4)
 
+        # Image variables for displaying data
         self.img = None
         self.canny = None
-        self.mode = 0
 
+        # Initializes ROS
         rospy.init_node('camera')
 
-        self.sub_mode = rospy.Subscriber('mode', UInt8, self.mode_callback)
-        self.pub_fiducial = rospy.Publisher('vision', Point, queue_size=10)
+        self.pub_fiducial = rospy.Publisher('fiducial', Point, queue_size=10)
 
         r = rospy.Rate(30)
         while not rospy.is_shutdown():
-            if self.mode == 3:
-                self.track_object()
-            elif self.mode == 5:
-                cv2.destroyAllWindows()
-                self.find_squares()
+            self.find_squares()
 
             if self.img != None:
                 cv2.imshow('camera', self.img)
-            if self.canny != None:
                 cv2.imshow('canny', self.canny)
+                cv2.waitKey(1)
 
-            cv2.waitKey(1)
             r.sleep()
-
-    def mode_callback(self, data):
-        self.mode = data
-
-    def track_object(self):
-        ret, img = self.cap.read()
-        roi_corners = []
-        roi_selected = False
-
-        if len(roi_corners) < 2:
-            for i in roi_corners:
-                cv2.circle(frame, (i[0], i[1]), 5, (0, 0, 255), -1)
-
-        elif len(roi_corners) == 2:
-            (x1, y1, x2, y2) = (roi_corners[0][0], roi_corners[0][1], roi_corners[1][0], roi_corners[1][1])
-            track_window = (x1, y1, x2-x1, y2-y1)
-            roi = frame[y1:y2, x1:x2]
-            hsv_roi = cv2.cvtColor(roi, cv2.COLOR_BGR2HSV)
-            mask = cv2.inRange(hsv_roi, np.array((0., 60., 30.)), np.array((180., 255., 255.)))
-            roi_hist = cv2.calcHist([hsv_roi], [0], mask, [180], [0,180])
-            cv2.normalize(roi_hist, roi_hist, 0, 255, cv2.NORM_MINMAX)
-            term_crit = (cv2.TERM_CRITERIA_EPS | cv2.TERM_CRITERIA_COUNT, 10, 1)
-            
-            roi_selected = True
-            roi_corners = []
-
-        if roi_selected:
-            hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-            dst = cv2.calcBackProject([hsv], [0], roi_hist, [0,180], 1)
-
-            ret, track_window = cv2.CamShift(dst, track_window, term_crit)
-
-            pts = cv2.cv.BoxPoints(ret)
-            pts = np.int0(pts)
-            cv2.polylines(frame, [pts], True, (0, 255, 255))
-
-        self.img = frame
-
 
     def find_squares(self):
         ret, img = self.cap.read()
@@ -145,7 +104,7 @@ class Vision():
             self.pub_fiducial.publish(fiducial_msg)
 
         self.img = img_display
-
+ 
     def is_square(self, cnt, epsilon):
         cnt_len = cv2.arcLength(cnt, True)
         cnt = cv2.approxPolyDP(cnt, epsilon * cnt_len, True)
@@ -158,18 +117,13 @@ class Vision():
 
             return (cnt, max_cos < 0.1)
 
-
-    def draw_circle(self, event, x, y, flags, param):
-        if event == cv2.EVENT_LBUTTONDOWN:
-            roi_corners.append((x,y))
-
     def angle_cos(self, p0, p1, p2):
         d1, d2 = (p0-p1).astype('float'), (p2-p1).astype('float')
         return abs( np.dot(d1, d2) / np.sqrt( np.dot(d1, d1)*np.dot(d2, d2) ) )
 
 if __name__ == '__main__':
     try:
-        var = Vision()
+        var = FindFiducial()
         rospy.spin()
     except rospy.ROSInterruptException:
         pass

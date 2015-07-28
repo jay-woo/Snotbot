@@ -14,6 +14,7 @@ class Drone():
         self.latitude = None
         self.longitude = None
         self.altitude = 0.0
+        self.waypoints = []
 
     def state_callback(self, data):
         self.armed = data.armed
@@ -29,4 +30,7 @@ class Drone():
         self.longitude = data.longitude
 
     def altitude_callback(self, data):
-        self.altitude = data
+        self.altitude = data.data
+
+    def waypoints_callback(self, data):
+        self.waypoints = data.waypoints
