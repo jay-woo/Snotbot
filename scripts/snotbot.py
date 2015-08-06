@@ -9,14 +9,16 @@ from geometry_msgs.msg import Point
 from std_msgs.msg import Header, Float64, UInt8
 from sensor_msgs.msg import Joy, NavSatFix
 from mavros.msg import BatteryStatus, State, OverrideRCIn, Waypoint, WaypointList
-from mavros.srv import CommandBool, WaypointPush, WaypointClear, WaypointGOTO, SetMode
+from mavros.srv import CommandBool, CommandHome, WaypointPush, WaypointClear, WaypointGOTO, SetMode
 
 from drone import *
 import mission_parser
+import gps_tools
 
 joystick = {'arm': 2, 'disarm': 3, 'failsafe': 0, 'auto': 4, 'manual': 5, 'x': 0, 'y': 1, 'z': 3, 'yaw': 2}
 xbox     = {'arm': 0, 'disarm': 1, 'failsafe': 8, 'auto': 2, 'manual': 3, 'x': 3, 'y': 4, 'z': 1, 'yaw': 0}
-ctrl = xbox
+
+ctrl = xbox # Set this variable to the joystick you are currently using
 
 class Snotbot():
     ###
@@ -31,18 +33,18 @@ class Snotbot():
         self.buttons = []
         self.controller = xbox
 
-        # Drone variables
+        # Drone variables 
         self.drone = Drone(0)  # Drone class contains valuable functions/variables
 
         # Landing platform variables
-        self.platform_gps = (0, 0, 0)
+        self.platform_gps = (0, 0)
 
         # Vision variables
         self.fiducial = (0, 0, 0) 
 
         # Miscellaneous variables
-        self.time_mode_started = 0    # Records when each mode in the finite state machine started
-        self.target_alt = 3.0
+        self.time_mode_started = 0    # Records when each mode in the finite state machine started 
+        self.target_alt = 12
         self.failsafe = True 
         self.launched = False
         self.returning = False
@@ -55,7 +57,7 @@ class Snotbot():
         # ROS subscribers
         self.sub_joy = rospy.Subscriber('/joy', Joy, self.joy_callback)
         self.sub_vision = rospy.Subscriber('/vision', Point, self.vision_callback)
-        self.sub_platform_gps = rospy.Subscriber('/platform_gps', Point, self.platform_gps_callback)
+        self.sub_platform_gps = rospy.Subscriber('/platform/global_position/global', NavSatFix, self.platform_gps_callback)
 
         self.sub_state = rospy.Subscriber('/drone/state', State, self.drone.state_callback)
         self.sub_battery = rospy.Subscriber('/drone/battery', BatteryStatus, self.drone.battery_callback)
@@ -68,20 +70,29 @@ class Snotbot():
         self.srv_mode = rospy.ServiceProxy('/drone/set_mode', SetMode)
         self.srv_wp_push =  rospy.ServiceProxy('/drone/mission/push', WaypointPush)
         self.srv_wp_clear = rospy.ServiceProxy('/drone/mission/clear', WaypointClear)
-        self.srv_wp_goto = rospy.ServiceProxy('/drone/mission/goto', WaypointGOTO)
 
-        # Preparing parameters
+        # ROS parameters
+        self.outdoors = rospy.get_param('~outdoors')
+
+        # Waits to process all parameters before launching 
         print "Waiting for drone to connect..."
-        for i in reversed(range(10)):
+        for i in reversed(range(5)):
+            if rospy.is_shutdown():
+                break
             print str(i+1) + "..."
             time.sleep(1)
-        print "Ready"
+
+        if not rospy.is_shutdown():
+            print "Ready"
 
         # Main loop
         r = rospy.Rate(10)
         while not rospy.is_shutdown():
             self.fly()
             r.sleep()
+
+        # Returns control to the radio when the main loop has died
+        self.kill_command()
 
     ###
     # Retrieves joystick data
@@ -90,6 +101,17 @@ class Snotbot():
         self.axes = list(data.axes)
         self.buttons = list(data.buttons)
 
+        dead_zone = 0.1
+        if ctrl == xbox:
+            if abs(self.axes[ ctrl['x'] ]) < dead_zone:
+                self.axes[ ctrl['x'] ] = 0.0
+            if abs(self.axes[ ctrl['y'] ]) < dead_zone:
+                self.axes[ ctrl['y'] ] = 0.0
+            if abs(self.axes[ ctrl['z'] ]) < dead_zone:
+                self.axes[ ctrl['z'] ] = 0.0
+            if abs(self.axes[ ctrl['yaw'] ]) < dead_zone:
+                self.axes[ ctrl['yaw'] ] = 0.0
+
     ###
     # Retrieves vision data
     ###
@@ -97,10 +119,26 @@ class Snotbot():
        self.fiducial = (data.x, data.y, data.z)
 
     ###
+    # Resets all important variables to default
+    ###
+    def reset_variables(self):
+        self.launched = False
+        self.returning = False
+        self.just_armed = True
+
+    ###
     # Retrieves GPS data from platform
     ###
     def platform_gps_callback(self, data):
-        self.platform_gps = (data.x, data.y, data.z)
+        self.platform_gps = (data.latitude, data.longitude)
+
+    ###
+    # Ends joystick control
+    ###
+    def kill_command(self):
+        rc_msg = OverrideRCIn()
+        rc_msg.channels = [65535 for i in range(8)] # Stops override
+        self.pub_rc.publish(rc_msg)
 
     ########################
     # FINITE STATE MACHINE #
@@ -119,14 +157,14 @@ class Snotbot():
 
         # Waits a few seconds before switching to launch mode
         if millis() - self.time_mode_started > 3000:
+            print "Launching drone"
             self.time_mode_started = millis()
-            self.srv_mode(0, '3')
             self.drone.mode = 2
 
     ###
     # Mode 2: launches the drone to a certain altitude
     ###
-    def launch(self):
+        def launch(self):
         self.drone.z = 1250
 
         # Launches the drone at the current location
@@ -160,39 +198,60 @@ class Snotbot():
     def rtl(self):
         if not self.returning:
             (lat, lon) = (self.platform_gps[0], self.platform_gps[1])
-            hold_time = 10
-            platform_wp = mission_parser.make_global_waypoint(lat, lon, self.target_alt, hold_time)
-            platform_wp = [platform_wp, platform_wp]
-            self.srv_wp_push(platform_wp)
+            platform_wp1 = mission_parser.make_global_waypoint(3, 16, True , lat, lon, self.target_alt, 10)
+            platform_wp2 = mission_parser.make_global_waypoint(3, 16, False, lat, lon, self.target_alt, 10)
+            waypoints = [platform_wp1, platform_wp2]
+            self.srv_wp_push(waypoints)
             self.returning = True
+        else:
+            platform_pt = gps_tools.Point(self.platform_gps[1], self.platform_gps[0])
+            drone_pt    = gps_tools.Point(self.drone.longitude, self.drone.latitude)
+            distance = gps_tools.distance(platform_pt, drone_pt)
 
-        current_waypoints = self.drone.waypoints
-        at_platform = False
-        for i in range(len(current_waypoints)):
-            if current_waypoints[i].is_current and i == 1:
-                at_platform = True
-
-        if at_platform:
-            self.time_mode_started = millis()
-            self.srv_mode(0, '5')
-            self.drone.mode = 5
+            if distance < 0.003:
+                self.time_mode_started = millis()
+                self.srv_mode(0, '5')
+                self.drone.mode = 5
 
     ###
     # Mode 5: land
     ###
     def land(self):
-        self.z = 1450
+        if self.fiducial != (0.0, 0.0, 0.0):
+            self.srv_mode(0, '2')
+        else:
+            self.srv_mode(0, '5')
 
-        if millis() - self.time_mode_started > 15000:
+        if abs(self.axes[ ctrl['x'] ]) > 0.1:
+            self.drone.x = 1500 - self.axes[ ctrl['x'] ] * 300
+        else:
+            self.drone.x = 1500 - self.fiducial[0] * 300
+
+        if abs(self.axes[ ctrl['y'] ]) > 0.1:
+            self.drone.y = 1500 - self.axes[ ctrl['y'] ] * 300
+        else:
+            self.drone.y = 1500 + self.fiducial[1] * 300
+
+        self.drone.z = 1500
+
+        print (self.drone.x, self.drone.y, self.fiducial)
+
+        if abs(self.drone.x - 1500) < 50 and abs(self.drone.y - 1500) < 50:
+            self.drone.z = 1400
+            if millis() - self.time_mode_started > 15000:
+                self.time_mode_started = millis()
+                self.drone.mode = 6
+            elif millis() - self.time_mode_started > 10000:
+                self.drone.z = 1000
+        else:
             self.time_mode_started = millis()
-            self.drone.mode = 6
-        elif millis() - self.time_mode_started > 10000:
-            self.z = 1000
 
     ###
     # Mode 6: disarm
     ###
     def disarm(self):
+        self.reset_variables()
+        self.failsafe = True
         self.srv_arm(False)
         self.drone.mode = 0
 
@@ -203,11 +262,9 @@ class Snotbot():
         if self.buttons:
             # Button 1 - enters failsafe mode (enables full control)
             if self.buttons[ ctrl['failsafe'] ]:
-                if self.failsafe:
-                    print "Failsafe: OFF"
-                else:
-                    print "Failsafe: ON"
-                self.failsafe = not self.failsafe 
+                self.reset_variables()
+                self.failsafe = True
+                print "Failsafe ON"
 
             # Button 3 - arms the drone
             if self.buttons[ ctrl['arm'] ]:
@@ -221,20 +278,31 @@ class Snotbot():
 
             # Button 5 - initiate autonomy routine
             if self.buttons[ ctrl['auto'] ]:
-                self.drone.mode = 1
+                if self.drone.armed:
+                    self.drone.mode = 2
+                else:
+                    self.drone.mode = 1 
+                self.failsafe = False
                 self.time_mode_started = millis()
                 print "Beginning finite state machine"
                 
             # Button 6 - end autonomy routine (RTL)
             if self.buttons[ ctrl['manual'] ]:
-                self.drone.mode = 5
+                self.drone.mode = 4
+                self.failsafe = False
                 print "Returning to launch and landing"
+
+            # Debounces button, once pressed
+            time.sleep(0.1)
 
         # Initiates finite state machines
         if not self.failsafe:
             # Arming
             if self.drone.mode == 1:
-                self.srv_mode(0, '5')
+                if self.outdoors:
+                    self.srv_mode(0, '5')
+                else:
+                    self.srv_mode(0, '2')
                 self.arm()
 
             # Launching
@@ -259,7 +327,10 @@ class Snotbot():
 
         else:
             # Reads joystick values
-            self.srv_mode(0, '5')
+            if self.outdoors:
+                self.srv_mode(0, '5')
+            else:
+                self.srv_mode(0, '2')
             self.drone.mode = 0
 
             x = 1500 - self.axes[ ctrl['x'] ] * 300
@@ -272,12 +343,12 @@ class Snotbot():
                 if abs(self.axes[ ctrl['z'] ]) > 0.1:
                     self.just_armed = False
 
-            if z < 1100:
+            if z < 1200:
                 z = 1000
             elif z < 1450:
-                z = 1350
-            elif z > 1600:
-                z = 1600
+                z = 1400
+            elif z > 1650:
+                z = 1750
             else:
                 z = 1500
 
@@ -286,13 +357,10 @@ class Snotbot():
             if abs(y - 1500) < 50:
                 y = 1500
 
-            print (x, y, z)
-
             (self.drone.x, self.drone.y, self.drone.z, self.drone.yaw) = (x, y, z, yaw)
 
         # Publishes commands
         if self.drone.armed:
-            print self.drone.mode
             rc_msg = OverrideRCIn()
             rc_msg.channels = [self.drone.x, self.drone.y, self.drone.z, self.drone.yaw, 1400, 0, 0, self.drone.cam_tilt] 
             self.pub_rc.publish(rc_msg) 

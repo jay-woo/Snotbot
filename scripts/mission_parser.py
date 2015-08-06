@@ -32,15 +32,15 @@ def get_mission(mission_num=0):
 
     return waypoint_list
 
-def make_global_waypoint(lat, lon, alt, hold):
+def make_waypoint(frame, command, is_current, lat, lon, alt, hold):
     waypoint = Waypoint()
 
-    waypoint.frame = 3
-    waypoint.command = 16
-    waypoint.is_current = 0
-    waypoint.autocontinue = 1
+    waypoint.frame = frame
+    waypoint.command = command
+    waypoint.is_current = is_current
+    waypoint.autocontinue = True
     waypoint.param1 = hold #hold time
-    waypoint.param2 = 2
+    waypoint.param2 = 0
     waypoint.param3 = 0
     waypoint.param4 = 0
     waypoint.x_lat = lat
