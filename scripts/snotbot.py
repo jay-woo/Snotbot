@@ -57,7 +57,7 @@ class Snotbot():
         # ROS subscribers
         self.sub_joy = rospy.Subscriber('/joy', Joy, self.joy_callback)
         self.sub_vision = rospy.Subscriber('/vision', Point, self.vision_callback)
-        self.sub_platform_gps = rospy.Subscriber('/platform/global_position/global', NavSatFix, self.platform_gps_callback)
+        self.sub_platform_gps = rospy.Subscriber('/platform_gps', Point, self.platform_gps_callback)
 
         self.sub_state = rospy.Subscriber('/drone/state', State, self.drone.state_callback)
         self.sub_battery = rospy.Subscriber('/drone/battery', BatteryStatus, self.drone.battery_callback)
@@ -130,7 +130,7 @@ class Snotbot():
     # Retrieves GPS data from platform
     ###
     def platform_gps_callback(self, data):
-        self.platform_gps = (data.latitude, data.longitude)
+        self.platform_gps = (data.x, data.y)
 
     ###
     # Ends joystick control
@@ -164,7 +164,7 @@ class Snotbot():
     ###
     # Mode 2: launches the drone to a certain altitude
     ###
-        def launch(self):
+    def launch(self):
         self.drone.z = 1250
 
         # Launches the drone at the current location
@@ -198,17 +198,18 @@ class Snotbot():
     def rtl(self):
         if not self.returning:
             (lat, lon) = (self.platform_gps[0], self.platform_gps[1])
-            platform_wp1 = mission_parser.make_global_waypoint(3, 16, True , lat, lon, self.target_alt, 10)
-            platform_wp2 = mission_parser.make_global_waypoint(3, 16, False, lat, lon, self.target_alt, 10)
+            platform_wp1 = mission_parser.make_waypoint(3, 16, True , lat, lon, self.target_alt, 10)
+            platform_wp2 = mission_parser.make_waypoint(3, 16, False, lat, lon, self.target_alt, 10)
             waypoints = [platform_wp1, platform_wp2]
             self.srv_wp_push(waypoints)
+            self.time_mode_started = millis()
             self.returning = True
         else:
             platform_pt = gps_tools.Point(self.platform_gps[1], self.platform_gps[0])
             drone_pt    = gps_tools.Point(self.drone.longitude, self.drone.latitude)
             distance = gps_tools.distance(platform_pt, drone_pt)
 
-            if distance < 0.003:
+            if distance < 0.003 and millis() - self.time_mode_started > 10000:
                 self.time_mode_started = millis()
                 self.srv_mode(0, '5')
                 self.drone.mode = 5
@@ -221,23 +222,24 @@ class Snotbot():
             self.srv_mode(0, '2')
         else:
             self.srv_mode(0, '5')
+#        elif millis() - self.time_mode_started > 3000: # Tries to find the landing platform again
+#            self.srv_mode(0, '3')
+#            self.time_mode_started = millis()
+#            self.returning = False
+#            self.drone.mode = 4
 
-        if abs(self.axes[ ctrl['x'] ]) > 0.1:
-            self.drone.x = 1500 - self.axes[ ctrl['x'] ] * 300
+        # Moves faster in the xy plane, if drone is higher in the air
+        if self.drone.altitude > 10:
+            scale = 200
         else:
-            self.drone.x = 1500 - self.fiducial[0] * 300
+            scale = 100
 
-        if abs(self.axes[ ctrl['y'] ]) > 0.1:
-            self.drone.y = 1500 - self.axes[ ctrl['y'] ] * 300
-        else:
-            self.drone.y = 1500 + self.fiducial[1] * 300
-
-        self.drone.z = 1500
-
-        print (self.drone.x, self.drone.y, self.fiducial)
+        self.drone.x = 1500 - self.fiducial[0] * scale
+        self.drone.y = 1500 + self.fiducial[1] * scale
+        self.drone.z = 1500 
 
         if abs(self.drone.x - 1500) < 50 and abs(self.drone.y - 1500) < 50:
-            self.drone.z = 1400
+            self.drone.z = 1350
             if millis() - self.time_mode_started > 15000:
                 self.time_mode_started = millis()
                 self.drone.mode = 6
@@ -245,6 +247,8 @@ class Snotbot():
                 self.drone.z = 1000
         else:
             self.time_mode_started = millis()
+
+        print (self.drone.x, self.drone.y, self.fiducial)
 
     ###
     # Mode 6: disarm
@@ -288,7 +292,7 @@ class Snotbot():
                 
             # Button 6 - end autonomy routine (RTL)
             if self.buttons[ ctrl['manual'] ]:
-                self.drone.mode = 4
+                self.drone.mode = 5
                 self.failsafe = False
                 print "Returning to launch and landing"
 

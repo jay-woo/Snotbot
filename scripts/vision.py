@@ -4,6 +4,7 @@ import numpy as np
 import matplotlib as plt
 import math
 import rospy
+import time
 
 from std_msgs.msg import UInt8
 from geometry_msgs.msg import Point
@@ -17,12 +18,21 @@ class Vision():
         self.frame_width = self.cap.get(3)
         self.frame_height = self.cap.get(4)
 
-        # On click listener for selecting object to track
-        cv2.setMouseCallback('camera', self.draw_circle)
-
         # Keeps track of images to display
         self.img = None
         self.canny = None
+
+        # Keeps track of fiducial position and velocity
+        self.x0 = 0.
+        self.y0 = 0.
+
+        self.x = 0.
+        self.y = 0.
+        self.z = 0.
+
+        # Keeps track of whether or not the fiducial has been lost
+        self.lost_count = 0
+        self.lost_fiducial = True
 
         # Drone's current mode in finite state machine
         self.mode = 0
@@ -33,7 +43,7 @@ class Vision():
         self.pub_fiducial = rospy.Publisher('vision', Point, queue_size=10)
 
         # Main loop
-        r = rospy.Rate(10)
+        r = rospy.Rate(30)
         while not rospy.is_shutdown():
             if self.mode == 3:
                 self.track_object() # Camshift
@@ -62,7 +72,8 @@ class Vision():
 
     # Tracks a selected object using the camshift algorithm
     def track_object(self):
-        ret, img = self.cap.read()
+        cv2.setMouseCallback('camera', self.draw_circle)
+        ret, frame = self.cap.read()
         roi_corners = []
         roi_selected = False
 
@@ -108,11 +119,11 @@ class Vision():
         img_display = img
 
         # Pre-processes image before tracking
-        img = cv2.inRange(img, np.array([150, 150, 150], dtype=np.uint8), np.array([255, 255, 255], dtype=np.uint8))
-        img = cv2.GaussianBlur(img, (5,5), 0)
-        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, (9,9))
+        lapl = cv2.Laplacian(img, cv2.CV_64F)
+        img = img - lapl
+        img = cv2.inRange(img, np.array([100, 100, 100], dtype=np.uint8), np.array([255, 255, 255], dtype=np.uint8))
+        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, (13,13))
         img = cv2.Canny(img, 200, 250, apertureSize=5)
-        img = cv2.dilate(img, None)
         retval, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
         self.canny = img
 
@@ -131,8 +142,8 @@ class Vision():
             children_areas = 0
             average_area = 0.0
 
-            # Skips contours that are enormous
-            if cv2.contourArea(cnt) > self.frame_height * self.frame_width * 0.4:
+            # Skips contours that are enormous or tiny
+            if cv2.contourArea(cnt) > self.frame_height * self.frame_width * 0.4 or cv2.contourArea(cnt) < 100:
                 i1 += 1
                 continue
 
@@ -149,7 +160,7 @@ class Vision():
             if len(children) > 0:
                 average_area = float(children_areas) / len(children)
                 for cld in children:
-                    if abs(cv2.contourArea(cld) - average_area) < 100:
+                    if self.is_square(cld, 0.01) and abs(cv2.contourArea(cld) - average_area) < 100:
                         children_final.append(cld)
 
             # Checks if the contour is a square and if it contains at least 5 children
@@ -166,22 +177,39 @@ class Vision():
 
         # Calculates the x, y coordinates and the area of the fiducial
         if len(squares) != 0:
+            self.lost_count = 0
             M = cv2.moments(np.array(squares))
-            x = (int(M['m10'] / M['m00']) * 2.0 / self.frame_width) - 1.0
-            y = (int(M['m01'] / M['m00']) * 2.0 / self.frame_height) - 1.0
-            z = cv2.contourArea(squares[0])
+            self.x0 = self.x
+            self.y0 = self.y
+            self.x = (int(M['m10'] / M['m00']) * 2.0 / self.frame_width) - 1.0
+            self.y = (int(M['m01'] / M['m00']) * 2.0 / self.frame_height) - 1.0
+            self.z = cv2.contourArea(squares[0])
 
             cv2.drawContours( img_display, squares, -1, (0, 255, 0), 2 )
    
-            fiducial_msg = Point()
-            (fiducial_msg.x, fiducial_msg.y, fiducial_msg.z) = (x, y, z)
-            self.pub_fiducial.publish(fiducial_msg)
-
-        # Publishes (x, y, z) = (0, 0, 0) if no fiducial has been detected
+        # Estimates the fiducial's position based on previous position data
         else:
-            fiducial_msg = Point()
-            (fiducial_msg.x, fiducial_msg.y, fiducial_msg.z) = (0, 0, 0)
-            self.pub_fiducial.publish(fiducial_msg)
+            self.lost_count += 1
+            dx = self.x - self.x0
+            dy = self.y - self.y0
+
+            self.x += dx
+            self.y += dy
+            self.x0 += dx
+            self.y0 += dy
+
+            if abs(self.x) > 1.0 or abs(self.y) > 1.0 or self.lost_count >= 5:
+              (self.x, self.y, self.x0, self.y0) = (0., 0., 0., 0.)
+
+            circle_x = int( (self.x + 1) / 2 * self.frame_width )
+            circle_y = int( (self.y + 1) / 2 * self.frame_height )
+            cv2.circle( img_display, (circle_x, circle_y), 20, (255, 0, 0), 2 )
+
+        fiducial_msg = Point()
+        (fiducial_msg.x, fiducial_msg.y, fiducial_msg.z) = (self.x, self.y, self.z)
+        self.pub_fiducial.publish(fiducial_msg)
+
+        print self.x, self.y, self.z
 
         self.img = img_display
 
