@@ -47,11 +47,11 @@ class Vision():
         while not rospy.is_shutdown():
             if self.mode == 3:
                 self.track_object() # Camshift
-            elif self.mode == 4 or self.mode == 5:
-                self.find_squares() # Square detection
             else:
-                ret, img = self.cap.read()
-                cv2.imshow('image', img)
+                self.find_squares() # Square detection
+#            else:
+#                ret, img = self.cap.read()
+#                cv2.imshow('camera', img)
 
             # Displays images for camshift (mode = 3) and square detection (mode = 5)
             if self.img != None:
@@ -65,8 +65,7 @@ class Vision():
     # Acquires drone's current mode
     def mode_callback(self, data):
         if self.mode != data.data:
-            if data.data == 3 or data.data == 4 or data.data == 5:
-                cv2.destroyAllWindows()
+            cv2.destroyAllWindows()
 
         self.mode = data.data
 
@@ -119,11 +118,12 @@ class Vision():
         img_display = img
 
         # Pre-processes image before tracking
-        lapl = cv2.Laplacian(img, cv2.CV_64F)
-        img = img - lapl
-        img = cv2.inRange(img, np.array([100, 100, 100], dtype=np.uint8), np.array([255, 255, 255], dtype=np.uint8))
-        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, (13,13))
-        img = cv2.Canny(img, 200, 250, apertureSize=5)
+        img = cv2.GaussianBlur(img, (3,3), 0)
+#        lapl = cv2.Laplacian(img, cv2.CV_64F)
+#        img = img - lapl
+#        img = cv2.inRange(img, np.array([0,0,0], dtype=np.uint8), np.array([255, 255, 255], dtype=np.uint8))
+#        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, (13,13))
+        img = cv2.Canny(img, 100, 150, apertureSize=5)
         retval, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
         self.canny = img
 
@@ -181,6 +181,7 @@ class Vision():
             M = cv2.moments(np.array(squares))
             self.x0 = self.x
             self.y0 = self.y
+
             self.x = (int(M['m10'] / M['m00']) * 2.0 / self.frame_width) - 1.0
             self.y = (int(M['m01'] / M['m00']) * 2.0 / self.frame_height) - 1.0
             self.z = cv2.contourArea(squares[0])
@@ -198,8 +199,8 @@ class Vision():
             self.x0 += dx
             self.y0 += dy
 
-            if abs(self.x) > 1.0 or abs(self.y) > 1.0 or self.lost_count >= 5:
-              (self.x, self.y, self.x0, self.y0) = (0., 0., 0., 0.)
+            if abs(self.x) > 1.0 or abs(self.y) > 1.0 or self.lost_count >= 3:
+                (self.x, self.y, self.x0, self.y0) = (0., 0., 0., 0.)
 
             circle_x = int( (self.x + 1) / 2 * self.frame_width )
             circle_y = int( (self.y + 1) / 2 * self.frame_height )
@@ -208,8 +209,6 @@ class Vision():
         fiducial_msg = Point()
         (fiducial_msg.x, fiducial_msg.y, fiducial_msg.z) = (self.x, self.y, self.z)
         self.pub_fiducial.publish(fiducial_msg)
-
-        print self.x, self.y, self.z
 
         self.img = img_display
 

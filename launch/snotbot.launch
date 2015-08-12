@@ -4,7 +4,7 @@
     <node pkg="snotbot" type="read_gps.py" name="platform" required="true" output="screen"></node>
 
     <node pkg="snotbot" type="snotbot.py" name="snotbot" required="true" output="screen">
-        <param name="outdoors" value="False" />
+        <param name="outdoors" value="True" />
     </node>
 
     <node pkg="snotbot" type="vision.py" name="vision" required="true" output="screen"></node>

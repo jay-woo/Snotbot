@@ -218,10 +218,9 @@ class Snotbot():
     # Mode 5: land
     ###
     def land(self):
-        if self.fiducial != (0.0, 0.0, 0.0):
-            self.srv_mode(0, '2')
-        else:
-            self.srv_mode(0, '5')
+#        if self.fiducial != (0.0, 0.0, 0.0):
+#        elif self.outdoors:
+#            self.srv_mode(0, '5')
 #        elif millis() - self.time_mode_started > 3000: # Tries to find the landing platform again
 #            self.srv_mode(0, '3')
 #            self.time_mode_started = millis()
@@ -229,26 +228,27 @@ class Snotbot():
 #            self.drone.mode = 4
 
         # Moves faster in the xy plane, if drone is higher in the air
-        if self.drone.altitude > 10:
-            scale = 200
+        self.srv_mode(0, '5')
+        if self.drone.altitude > 8.0:
+            scale = 250
         else:
             scale = 100
 
-        self.drone.x = 1500 - self.fiducial[0] * scale
-        self.drone.y = 1500 + self.fiducial[1] * scale
+        self.drone.x = int(round(1500 + self.fiducial[0] * scale))
+        self.drone.y = int(round(1500 + self.fiducial[1] * scale))
         self.drone.z = 1500 
 
-        if abs(self.drone.x - 1500) < 50 and abs(self.drone.y - 1500) < 50:
-            self.drone.z = 1350
-            if millis() - self.time_mode_started > 15000:
+        if abs(self.drone.x - 1500) < 50 and abs(self.drone.y - 1500) < 50 and self.fiducial != (0.0, 0.0, 0.0):
+            self.drone.z = 1300
+            if millis() - self.time_mode_started > 40000:
                 self.time_mode_started = millis()
                 self.drone.mode = 6
-            elif millis() - self.time_mode_started > 10000:
+            elif millis() - self.time_mode_started > 30000:
                 self.drone.z = 1000
         else:
             self.time_mode_started = millis()
 
-        print (self.drone.x, self.drone.y, self.fiducial)
+        print (self.drone.x, self.drone.y, self.drone.z, self.fiducial)
 
     ###
     # Mode 6: disarm
@@ -294,6 +294,7 @@ class Snotbot():
             if self.buttons[ ctrl['manual'] ]:
                 self.drone.mode = 5
                 self.failsafe = False
+                self.time_mode_started = millis()
                 print "Returning to launch and landing"
 
             # Debounces button, once pressed
