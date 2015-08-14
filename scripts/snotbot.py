@@ -41,6 +41,12 @@ class Snotbot():
 
         # Vision variables
         self.fiducial = (0, 0, 0) 
+        self.t0 = 0.
+        self.t1 = 0.
+        self.error_x_sum = 0.
+        self.error_y_sum = 0.
+        self.error_x_prev = 0.
+        self.error_y_prev = 0.
 
         # Miscellaneous variables
         self.time_mode_started = 0    # Records when each mode in the finite state machine started 
@@ -214,31 +220,61 @@ class Snotbot():
                 self.srv_mode(0, '5')
                 self.drone.mode = 5
 
-    ###
-    # Mode 5: land
-    ###
     def land(self):
-#        if self.fiducial != (0.0, 0.0, 0.0):
-#        elif self.outdoors:
-#            self.srv_mode(0, '5')
-#        elif millis() - self.time_mode_started > 3000: # Tries to find the landing platform again
-#            self.srv_mode(0, '3')
-#            self.time_mode_started = millis()
-#            self.returning = False
-#            self.drone.mode = 4
+    #        if self.fiducial == (0.0, 0.0, 0.0) and  millis() - self.time_mode_started > 3000: # Tries to find the landing platform again
+    #            self.srv_mode(0, '3')
+    #            self.time_mode_started = millis()
+    #            self.returning = False
+    #            self.drone.mode = 4
 
         # Moves faster in the xy plane, if drone is higher in the air
         self.srv_mode(0, '5')
-        if self.drone.altitude > 8.0:
-            scale = 250
-        else:
+        if self.fiducial[2] > 10000:
             scale = 100
+        else:
+            scale = 300
 
-        self.drone.x = int(round(1500 + self.fiducial[0] * scale))
-        self.drone.y = int(round(1500 + self.fiducial[1] * scale))
+        self.t0 = self.t1
+        self.t1 = millis()
+        dt = (self.t1 - self.t0) / 1000.
+
+        error_x = self.fiducial[0]
+        error_y = self.fiducial[1]
+        self.error_x_sum += error_x * dt
+        self.error_y_sum += error_y * dt
+        if self.error_x_prev == 0.0 and self.error_y_prev == 0.0:
+            self.error_x_prev = error_x
+            self.error_y_prev = error_y
+
+        #                                        PID vals
+        P_x = error_x                            * 0.80
+        P_y = error_y                            * 0.50
+        I_x = self.error_x_sum                   * 0.
+        I_y = self.error_y_sum                   * 0.
+        D_x = (error_x - self.error_x_prev) / dt * 0.1
+        D_y = (error_y - self.error_y_prev) / dt * 0.06
+
+        self.error_x_prev = error_x
+        self.error_y_prev = error_y
+
+        PID_x = P_x + I_x + D_x
+        PID_y = P_y + I_y + D_y
+
+        self.drone.x = int(round(1500 + PID_x * scale))
+        self.drone.y = int(round(1500 + PID_y * scale))
         self.drone.z = 1500 
 
-        if abs(self.drone.x - 1500) < 50 and abs(self.drone.y - 1500) < 50 and self.fiducial != (0.0, 0.0, 0.0):
+        # Prevents publishing outside of RC range
+        if self.drone.x > 1800:
+            self.drone.x = 1800
+        elif self.drone.x < 1200:
+            self.drone.x = 1200
+        if self.drone.y > 1800:
+            self.drone.y = 1800
+        elif self.drone.y < 1200:
+            self.drone.y = 1200
+
+        if abs(self.drone.x - 1500) < 20 and abs(self.drone.y - 1500) < 20:
             self.drone.z = 1300
             if millis() - self.time_mode_started > 40000:
                 self.time_mode_started = millis()
@@ -295,6 +331,7 @@ class Snotbot():
                 self.drone.mode = 5
                 self.failsafe = False
                 self.time_mode_started = millis()
+                self.t1 = millis()
                 print "Returning to launch and landing"
 
             # Debounces button, once pressed
@@ -351,7 +388,7 @@ class Snotbot():
             if z < 1200:
                 z = 1000
             elif z < 1450:
-                z = 1400
+                z = 1300
             elif z > 1650:
                 z = 1750
             else:
@@ -367,7 +404,7 @@ class Snotbot():
         # Publishes commands
         if self.drone.armed:
             rc_msg = OverrideRCIn()
-            rc_msg.channels = [self.drone.x, self.drone.y, self.drone.z, self.drone.yaw, 1400, 0, 0, self.drone.cam_tilt] 
+            rc_msg.channels = [self.drone.x, self.drone.y, self.drone.z, self.drone.yaw, 1400, self.drone.cam_tilt, self.drone.cam_tilt, self.drone.cam_tilt] 
             self.pub_rc.publish(rc_msg) 
 
         self.pub_mode.publish(self.drone.mode)

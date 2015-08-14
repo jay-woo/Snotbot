@@ -2,7 +2,7 @@ class Drone():
     def __init__(self, drone_id):
         # Non-ROS variables
         self.drone_id = drone_id
-        (self.x, self.y, self.z, self.yaw, self.cam_tilt) = (1500, 1500, 1000, 1500, 1500)
+        (self.x, self.y, self.z, self.yaw, self.cam_tilt) = (1500, 1500, 1000, 1500, 1300)
         self.mode = 0
       
         # ROS state variables

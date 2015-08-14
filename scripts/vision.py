@@ -30,10 +30,6 @@ class Vision():
         self.y = 0.
         self.z = 0.
 
-        # Keeps track of whether or not the fiducial has been lost
-        self.lost_count = 0
-        self.lost_fiducial = True
-
         # Drone's current mode in finite state machine
         self.mode = 0
 
@@ -113,103 +109,121 @@ class Vision():
     # Tracks a square fiducial
     def find_squares(self):
         # Captures and calibrates a frame
-        ret, img = self.cap.read()
-        img = calibrate(img)
-        img_display = img
+        ret, frame = self.cap.read()
+        frame = calibrate(frame)
+        img_display = np.copy(frame)
+        filterCombination = 0
 
-        # Pre-processes image before tracking
-        img = cv2.GaussianBlur(img, (3,3), 0)
-#        lapl = cv2.Laplacian(img, cv2.CV_64F)
-#        img = img - lapl
-#        img = cv2.inRange(img, np.array([0,0,0], dtype=np.uint8), np.array([255, 255, 255], dtype=np.uint8))
-#        img = cv2.morphologyEx(img, cv2.MORPH_OPEN, (13,13))
-        img = cv2.Canny(img, 100, 150, apertureSize=5)
-        retval, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
-        self.canny = img
 
-        # Locates connected components within the image
-        contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
-   
-        # Helper variables
-        i1 = 0
-        squares = []
+        while (filterCombination != 2):
+            # Pre-processes image before tracking
+            img = np.copy(frame)
+            img = cv2.GaussianBlur(img, (3,3), 0)
+            if filterCombination == 1:
+                # lapl = cv2.Laplacian(img, cv2.CV_64F)
+                # img = img - lapl
+                img = cv2.inRange(img, np.array([125, 125, 125], dtype=np.uint8), np.array([255, 255, 255], dtype=np.uint8))
+            img = cv2.Canny(img, 100, 150, apertureSize=5)
+            retval, img = cv2.threshold(img, 100, 255, cv2.THRESH_BINARY)
+            self.canny = img
 
-        # Analyzes each contour: checks if it's a square, checks if it has at least 5 "children"
-        for cnt in contours:
-            # More helper variables
-            children = []
-            children_final = []
-            children_areas = 0
-            average_area = 0.0
+            # Locates connected components within the image
+            contours, hierarchy = cv2.findContours(img, cv2.RETR_TREE, cv2.CHAIN_APPROX_SIMPLE)
 
-            # Skips contours that are enormous or tiny
-            if cv2.contourArea(cnt) > self.frame_height * self.frame_width * 0.4 or cv2.contourArea(cnt) < 100:
+            # Helper variables
+            i1 = 0
+            squares = []
+
+            # Analyzes each contour: checks if it's a square, checks if it has at least 5 "children"
+            for cnt in contours:
+                # More helper variables
+                children = []
+                children_final = []
+                children_areas = 0
+                average_area = 0.0
+
+                # Skips contours that are enormous or tiny
+                if cv2.contourArea(cnt) > self.frame_height * self.frame_width * 0.4 or cv2.contourArea(cnt) < 100:
+                    i1 += 1
+                    continue
+
+                # Appends all of the contour's children to an array (child = contour enclosed by a parent contour)
+                if len(hierarchy[0]) > 0:
+                    i2 = hierarchy[0][i1][2]
+                    while i2 != -1:
+                        children.append(contours[i2])
+                        children_areas += cv2.contourArea(contours[i2])
+                        i2 = hierarchy[0][i2][0]
                 i1 += 1
-                continue
+       
+                # The children must be similarly sized in the fiducial 
+                if len(children) > 0:
+                    average_area = float(children_areas) / len(children)
+                    for cld in children:
+                        if self.is_square(cld, 0.01) and abs(cv2.contourArea(cld) - average_area) < 100:
+                            children_final.append(cld)
 
-            # Appends all of the contour's children to an array (child = contour enclosed by a parent contour)
-            if len(hierarchy[0]) > 0:
-                i2 = hierarchy[0][i1][2]
-                while i2 != -1:
-                    children.append(contours[i2])
-                    children_areas += cv2.contourArea(contours[i2])
-                    i2 = hierarchy[0][i2][0]
-            i1 += 1
-   
-            # The children must be similarly sized in the fiducial 
-            if len(children) > 0:
-                average_area = float(children_areas) / len(children)
-                for cld in children:
-                    if self.is_square(cld, 0.01) and abs(cv2.contourArea(cld) - average_area) < 100:
-                        children_final.append(cld)
+                # Checks if the contour is a square and if it contains at least 5 children
+                cnt, cnt_square = self.is_square(cnt, 0.02) 
+                if cnt_square and len(children_final) >= 5:
+                    squares.append(cnt)
 
-            # Checks if the contour is a square and if it contains at least 5 children
-            cnt, cnt_square = self.is_square(cnt, 0.02) 
-            if cnt_square and len(children_final) >= 5:
-                squares.append(cnt)
+                    # Only tracks the smallest detected fiducial
+                    if len(squares) == 2:
+                        if filterCombination == 0:
+                            if cv2.contourArea(squares[0]) > cv2.contourArea(squares[1]):
+                                squares.pop(0)
+                            else:
+                                squares.pop(1)
+                        elif filterCombination == 1:
+                            if cv2.contourArea(squares[0]) < cv2.contourArea(squares[1]):
+                                squares.pop(0)
+                            else:
+                                squares.pop(1)
 
-                # Only tracks the smallest detected fiducial
-                if len(squares) == 2:
-                    if cv2.contourArea(squares[0]) > cv2.contourArea(squares[1]):
-                        squares.pop(0)
-                    else:
-                        squares.pop(1)
+            # Calculates the x, y coordinates and the area of the fiducial
+            if len(squares) != 0:
+                M = cv2.moments(np.array(squares))
+                self.x0 = self.x
+                self.y0 = self.y
 
-        # Calculates the x, y coordinates and the area of the fiducial
-        if len(squares) != 0:
-            self.lost_count = 0
-            M = cv2.moments(np.array(squares))
-            self.x0 = self.x
-            self.y0 = self.y
+                self.x = (int(M['m10'] / M['m00']) * 2.0 / self.frame_width) - 1.0
+                self.y = (int(M['m01'] / M['m00']) * 2.0 / self.frame_height) - 1.0
+                self.z = cv2.contourArea(squares[0])
 
-            self.x = (int(M['m10'] / M['m00']) * 2.0 / self.frame_width) - 1.0
-            self.y = (int(M['m01'] / M['m00']) * 2.0 / self.frame_height) - 1.0
-            self.z = cv2.contourArea(squares[0])
+                cv2.drawContours( img_display, squares, -1, (0, 255, 0), 2 )
 
-            cv2.drawContours( img_display, squares, -1, (0, 255, 0), 2 )
-   
-        # Estimates the fiducial's position based on previous position data
-        else:
-            self.lost_count += 1
-            dx = self.x - self.x0
-            dy = self.y - self.y0
+                filterCombination = 2
 
-            self.x += dx
-            self.y += dy
-            self.x0 += dx
-            self.y0 += dy
+            # Estimates the fiducial's position based on previous position data
+            else:
+                filterCombination += 1
+                if filterCombination == 2:
+                    dx = self.x - self.x0
+                    dy = self.y - self.y0
 
-            if abs(self.x) > 1.0 or abs(self.y) > 1.0 or self.lost_count >= 3:
-                (self.x, self.y, self.x0, self.y0) = (0., 0., 0., 0.)
+                    self.x += dx
+                    self.y += dy
+                    self.x0 += dx
+                    self.y0 += dy
 
-            circle_x = int( (self.x + 1) / 2 * self.frame_width )
-            circle_y = int( (self.y + 1) / 2 * self.frame_height )
-            cv2.circle( img_display, (circle_x, circle_y), 20, (255, 0, 0), 2 )
+                    if self.x > 1.0:
+                        self.x = 1.0
+                    elif self.x < -1.0:
+                        self.x = 1.0
+                    if self.y > 1.0:
+                        self.y = 1.0
+                    elif self.y < -1.0:
+                        self.y = 1.0
+
+                    circle_x = int( (self.x + 1) / 2 * self.frame_width )
+                    circle_y = int( (self.y + 1) / 2 * self.frame_height )
+                    cv2.circle( img_display, (circle_x, circle_y), 20, (255, 0, 0), 2 )                    
 
         fiducial_msg = Point()
         (fiducial_msg.x, fiducial_msg.y, fiducial_msg.z) = (self.x, self.y, self.z)
         self.pub_fiducial.publish(fiducial_msg)
-
+        
         self.img = img_display
 
     # Checks if the contour is a square
